@@ -1,0 +1,231 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String   @id @default(uuid())
+  name             String
+  email            String   @unique
+  passwordHash     String
+  role             String   @default("TENANT") // SUPER_ADMIN, OWNER, ADMIN, TENANT
+  themePreference  String   @default("system")
+  phone            String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  ownedProperties  Property[]    @relation("PropertyOwner")
+  adminProperties  PropertyAdmin[]
+  tenant           Tenant?
+  notifications    Notification[]
+  verifiedPayments Payment[]     @relation("VerifiedBy")
+  refreshTokens    RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model Property {
+  id          String   @id @default(uuid())
+  ownerId     String
+  owner       User     @relation("PropertyOwner", fields: [ownerId], references: [id])
+  name        String
+  address     String
+  provinceId  String?
+  province    String?
+  regencyId   String?
+  regency     String?
+  districtId  String?
+  district    String?
+  villageId   String?
+  village     String?
+  latitude    Float?
+  longitude   Float?
+  description String?
+  facilities  String   @default("[]") // stored as JSON string due to sqlite limits
+  photos      String   @default("[]") // stored as JSON string
+  lateFeePct  Float    @default(2.0)    // % per minggu
+  maxLateFee  Float    @default(10.0)   // % maksimum
+  isActive    Boolean  @default(true)
+  type        String   @default("KOST") // KOST, KONTRAKAN
+  billingCycle String  @default("MONTHLY") // MONTHLY, YEARLY
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  rooms   Room[]
+  admins  PropertyAdmin[]
+
+  @@map("properties")
+}
+
+model PropertyAdmin {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([propertyId, userId])
+  @@map("property_admins")
+}
+
+model Room {
+  id          String     @id @default(uuid())
+  propertyId  String
+  property    Property   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomNumber  String
+  type        String
+  price       Float
+  floor       Int?
+  description String?
+  photos      String   @default("[]") // stored as JSON string
+  status      String   @default("EMPTY") // EMPTY, OCCUPIED, MAINTENANCE
+  category    String   @default("Campur") // Putra, Putri, Campur
+  facilities  String   @default("[]") // stored as JSON string
+  depositAmount Float  @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  contracts Contract[]
+
+  @@unique([propertyId, roomNumber])
+  @@map("rooms")
+}
+
+model Tenant {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone         String?
+  idCardNumber  String?
+  idCardPhoto   String?
+  emergencyContact String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  contracts Contract[]
+
+  @@map("tenants")
+}
+
+model Contract {
+  id              String   @id @default(uuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  roomId          String
+  room            Room     @relation(fields: [roomId], references: [id])
+  startDate       DateTime
+  endDate         DateTime?
+  durationMonths  Int
+  rentAmount      Float
+  deposit         Float    @default(0)
+  depositStatus   String   @default("HELD") // HELD, REFUNDED, DEDUCTED
+  balance         Float    @default(0)      // Unallocated overpayment balance
+  dueDay          Int      // 1-31, tanggal jatuh tempo tiap bulan
+  notes           String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  invoices Invoice[]
+  payments Payment[]
+
+  @@map("contracts")
+}
+
+model Invoice {
+  id          String        @id @default(uuid())
+  contractId  String
+  contract    Contract      @relation(fields: [contractId], references: [id])
+  period      String        // "YYYY-MM"
+  amount      Float
+  lateFee     Float         @default(0)
+  totalAmount Float
+  paidAmount  Float         @default(0)
+  status      String        @default("ACTIVE") // PENDING, ACTIVE, PARTIAL, WAITING_VERIFICATION, PAID, OVERDUE, CANCELLED
+  dueDate     DateTime
+  paidAt      DateTime?
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  allocations PaymentAllocation[]
+
+  @@unique([contractId, period])
+  @@map("invoices")
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  contractId     String
+  contract       Contract      @relation(fields: [contractId], references: [id])
+  method         String        // MANUAL, MIDTRANS
+  amount         Float
+  proofUrl       String?       // untuk pembayaran manual
+  midtransToken  String?       // Snap token untuk Midtrans
+  midtransOrderId String?
+  status         String        @default("PENDING") // PENDING, WAITING_VERIFICATION, VERIFIED, REJECTED, EXPIRED
+  verifiedById   String?
+  verifiedBy     User?         @relation("VerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt     DateTime?
+  rejectReason   String?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  allocations    PaymentAllocation[]
+
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id          String   @id @default(uuid())
+  paymentId   String
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount      Float
+  createdAt   DateTime @default(now())
+
+  @@map("payment_allocations")
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String              // INVOICE_CREATED, PAYMENT_REMINDER, etc
+  channel   String              // EMAIL, WHATSAPP
+  message   String
+  isRead    Boolean             @default(false)
+  sentAt    DateTime?
+  status    String              @default("pending") // pending, sent, failed
+  createdAt DateTime            @default(now())
+
+  @@map("notifications")
+}
